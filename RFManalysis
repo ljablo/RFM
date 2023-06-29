@@ -1,0 +1,96 @@
+WITH rfm_raw AS (
+SELECT  
+CustomerID,
+MAX(InvoiceDate) AS last_purchase_date,
+COUNT(DISTINCT InvoiceNo) AS frequency,
+ROUND(SUM(UnitPrice * Quantity), 2)AS monetary,
+DATE_DIFF(CAST(PARSE_DATE('%Y-%m-%d', '2011-12-01') AS TIMESTAMP), MAX(InvoiceDate), DAY) AS recency
+FROM `turing_data_analytics.rfm`
+WHERE InvoiceDate BETWEEN '2010-12-01' AND '2011-12-01'
+AND UnitPrice > 0
+AND Quantity > 0
+AND CustomerID IS NOT NULL
+GROUP BY CustomerID
+),
+rfm_quartiles AS (
+SELECT 
+quart.*,
+--All quartiles for MONETARY
+quartmon.percentiles[1] AS m25, 
+quartmon.percentiles[2] AS m50,
+quartmon.percentiles[3] AS m75,    
+--All quartiles for FREQUENCY
+quartfreq.percentiles[1] AS f25, 
+quartfreq.percentiles[2] AS f50,
+quartfreq.percentiles[3] AS f75,    
+--All quartiles for RECENCY
+quartrec.percentiles[1] AS r25, 
+quartrec.percentiles[2] AS r50,
+quartrec.percentiles[3] AS r75, 
+FROM 
+rfm_raw quart,
+(SELECT APPROX_QUANTILES(monetary, 4) percentiles FROM
+rfm_raw) quartmon,
+(SELECT APPROX_QUANTILES(frequency, 4) percentiles FROM
+rfm_raw) quartfreq,
+(SELECT APPROX_QUANTILES(recency, 4) percentiles FROM
+rfm_raw) quartrec
+),
+rfm_scores AS (
+SELECT *,
+CONCAT(CAST(r_score AS STRING), CAST(f_score AS STRING), CAST(m_score AS STRING)) AS rfm_score 
+FROM (
+SELECT *, 
+CASE WHEN recency <= r25 THEN 4
+WHEN recency <= r50 AND recency > r25 THEN 3 
+WHEN recency <= r75 AND recency > r50 THEN 2 
+WHEN recency > r75 THEN 1
+END AS r_score,
+CASE WHEN frequency <= f25 THEN 1
+WHEN frequency <= f50 AND frequency > f25 THEN 2 
+WHEN frequency <= f75 AND frequency > f50 THEN 3 
+WHEN frequency > f75 THEN 4 
+END AS f_score,
+CASE WHEN monetary <= m25 THEN 1
+WHEN monetary <= m50 AND monetary > m25 THEN 2 
+WHEN monetary <= m75 AND monetary > m50 THEN 3 
+WHEN monetary > m75 THEN 4 
+END AS m_score,
+FROM rfm_quartiles
+)
+)
+  SELECT 
+scores.customerID, 
+scores.frequency, 
+scores.monetary, 
+scores.recency,
+scores.r_score, 
+scores.f_score,
+scores.m_score, 
+scores.rfm_score, 
+scores.segment, 
+raw.Description, 
+raw.Quantity, 
+raw.Country, 
+raw.InvoiceDate 
+  FROM (
+SELECT *,
+CASE 
+WHEN rfm_score = '444' THEN 'Champions'
+WHEN rfm_score IN ('443','442','341','342','441', '343', '334', '344') THEN 'Loyal Customers'
+WHEN rfm_score IN ('434','433','332','333', '432', '422', '423', '424', '324', '323') THEN 'Potential Loyalists'
+WHEN rfm_score IN ('431','421','411', '413', '414') THEN 'Recent Customers'
+WHEN rfm_score IN ('331','321','311', '412', '322', '312','314', '313') THEN 'Promising'
+WHEN rfm_score IN ('231','232','213','212', '223', '242', '241') THEN 'Customers Needing Attention'
+WHEN rfm_score IN ('211','221','222', '123') THEN 'About to Sleep'
+WHEN rfm_score IN ('244','243','234','233') THEN 'At Risk'
+WHEN rfm_score IN ('144','134', '214','224','124', '143', '133') THEN 'Cant Lose Them'
+WHEN rfm_score IN ('114','113','112', '122', '121','142','141','132','131') THEN 'Hibernating'
+WHEN rfm_score IN ('111') THEN 'Lost'
+ELSE null
+END AS segment
+FROM rfm_scores
+) scores
+LEFT JOIN turing_data_analytics.rfm raw
+ON scores.CustomerID = raw.CustomerID AND scores.last_purchase_date = raw.InvoiceDate
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13;
